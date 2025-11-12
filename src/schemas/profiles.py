@@ -13,13 +13,13 @@ from validation import (
 
 from database.models.accounts import GenderEnum
 
+
 class ProfileSchema(BaseModel):
     first_name: str
     last_name: str
     gender: GenderEnum
     birth_date: date
     info: str
-
 
     @field_validator("first_name")
     def validate_first_name(cls, v):
@@ -43,4 +43,3 @@ class ProfileResponseSchema(BaseModel):
     date_of_birth: date
     info: str | None = None
     avatar: HttpUrl | None = None
-

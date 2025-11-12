@@ -57,7 +57,6 @@ async def user_profile(
     elif user_db.profile:
         raise HTTPException(status_code=403, detail="User already has a profile.")
 
-
     try:
         avatar_url = await save_avatar(avatar, s3_client, user_id)
     except Exception:
