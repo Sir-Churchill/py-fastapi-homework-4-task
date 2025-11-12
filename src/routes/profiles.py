@@ -63,8 +63,8 @@ async def user_profile(
         raise HTTPException(status_code=500, detail="Failed to upload avatar. Please try again later.")
 
     profile = UserProfileModel(
-        first_name=first_name,
-        last_name=last_name,
+        first_name=first_name.lower(),
+        last_name=last_name.lower(),
         avatar=avatar_url,
         gender=gender,
         date_of_birth=date_of_birth,
