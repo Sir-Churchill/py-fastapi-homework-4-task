@@ -284,15 +284,15 @@ async def request_password_reset_token(
 
     await db.execute(delete(PasswordResetTokenModel).where(PasswordResetTokenModel.user_id == user.id))
 
+    reset_token = PasswordResetTokenModel(user_id=cast(int, user.id))
+    db.add(reset_token)
+    await db.commit()
+
     background_tasks.add_task(
         email_sender.send_password_reset_email,
         data.email,
         password_reset_link
     )
-
-    reset_token = PasswordResetTokenModel(user_id=cast(int, user.id))
-    db.add(reset_token)
-    await db.commit()
 
     return MessageResponseSchema(
         message="If you are registered, you will receive an email with instructions."

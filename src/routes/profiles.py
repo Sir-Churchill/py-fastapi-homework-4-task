@@ -14,6 +14,11 @@ from config.dependencies import get_s3_storage_client
 
 from database.models.accounts import GenderEnum, UserGroupEnum
 
+from exceptions.security import TokenExpiredError, InvalidTokenError
+
+from config import get_jwt_auth_manager
+from security.interfaces import JWTAuthManagerInterface
+
 router = APIRouter()
 
 
@@ -44,6 +49,17 @@ async def verify_token(authorization: str | None = Header(None)):
     return token
 
 
+async def get_current_user_id(token: str = Depends(verify_token),
+                              jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager)):
+    try:
+        payload = jwt_manager.decode_access_token(token)
+        return payload["user_id"]
+    except TokenExpiredError:
+        raise HTTPException(status_code=401, detail="Token has expired.")
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token.")
+
+
 @router.post("/users/{user_id}/profile/", response_model=ProfileResponseSchema, status_code=201)
 async def user_profile(
         user_id: int,
@@ -62,7 +78,9 @@ async def user_profile(
     if not user_db or not user_db.is_active:
         raise HTTPException(status_code=401, detail="User not found or not active.")
 
-    if user_db.group.id != 3 and user_db.id != user_id:
+    current_user_id = await get_current_user_id(token)
+
+    if user_db.group.id != 3 and current_user_id != user_id:
         raise HTTPException(status_code=403, detail="You don't have permission to edit this profile.")
 
     if user_db.profile:
