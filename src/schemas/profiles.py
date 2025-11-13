@@ -22,7 +22,7 @@ async def profile(
         info: Annotated[str | None, Form()] = None,
         avatar: Annotated[UploadFile, File(...)] = None,
 ):
-    if not info and not info.strip():
+    if info is not None and not info.strip():
         raise HTTPException(status_code=422, detail="Info field cannot be empty or contain only spaces.")
 
     try:
