@@ -1,19 +1,18 @@
-import uuid
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, UploadFile
-from fastapi.params import Depends, File, Form
+from fastapi import APIRouter, HTTPException, Header
+from fastapi.params import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio.session import AsyncSession
-from database import get_db, UserModel, UserProfileModel
-from schemas.profiles import ProfileResponseSchema, ProfileSchema
+from database import get_db, UserModel, UserProfileModel, UserGroupModel, RefreshTokenModel
+from schemas.profiles import ProfileResponseSchema, profile
 from sqlalchemy.orm import selectinload
 
 from storages.interfaces import S3StorageInterface
 
 from config.dependencies import get_s3_storage_client
 
-from database.models.accounts import GenderEnum
+from database.models.accounts import GenderEnum, UserGroupEnum
 
 router = APIRouter()
 
@@ -21,58 +20,84 @@ router = APIRouter()
 async def save_avatar(file, s3_client, user_id) -> str:
     file_data = await file.read()
 
-    max_size_mb = 1
-    if len(file_data) > max_size_mb * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="File size exceeds 1MB limit.")
+    extension = file.filename.split(".")[-1].lower()
+    if extension == "jpeg":
+        extension = "jpg"
 
-    extension = file.filename.split(".")[-1]
-    unique_filename = f"avatars/{user_id}_avatar.{extension}"
+    avatar_key = f"avatars/{user_id}_avatar.{extension}"
 
-    await s3_client.upload_file(unique_filename, file_data)
+    await s3_client.upload_file(avatar_key, file_data)
 
-    file_url = await s3_client.get_file_url(unique_filename)
+    return avatar_key
 
-    return file_url
+
+async def verify_token(authorization: str | None = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header is missing")
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format. Expected 'Bearer <token>'")
+
+    token = parts[1]
+
+    return token
 
 
 @router.post("/users/{user_id}/profile/", response_model=ProfileResponseSchema, status_code=201)
 async def user_profile(
         user_id: int,
-        first_name: str = Form(...),
-        last_name: str = Form(...),
-        gender: GenderEnum = Form(...),
-        date_of_birth: date = Form(...),
-        info: str = Form(...),
-        avatar: UploadFile = File(...),
+        user: dict = Depends(profile),
         db: AsyncSession = Depends(get_db),
-        s3_client: S3StorageInterface = Depends(get_s3_storage_client)
+        token: str = Depends(verify_token),
+        s3_client: S3StorageInterface = Depends(get_s3_storage_client),
 ):
     result = await db.execute(
-        select(UserModel).options(selectinload(UserModel.profile)).where(UserModel.id == user_id)
+        select(UserModel).options(
+            selectinload(UserModel.profile),
+            selectinload(UserModel.group)).where(UserModel.id == user_id)
     )
     user_db = result.scalar_one_or_none()
 
     if not user_db or not user_db.is_active:
         raise HTTPException(status_code=401, detail="User not found or not active.")
-    elif user_db.profile:
-        raise HTTPException(status_code=403, detail="User already has a profile.")
+
+    if user_db.group.id != 3 and user_db.id != user_id:
+        raise HTTPException(status_code=403, detail="You don't have permission to edit this profile.")
+
+    if user_db.profile:
+        raise HTTPException(status_code=400, detail="User already has a profile.")
 
     try:
-        avatar_url = await save_avatar(avatar, s3_client, user_id)
-    except Exception:
+        avatar_key = await save_avatar(user["avatar"], s3_client, user_id)
+    except Exception as e:
+        import logging
+        logging.error(f"Avatar upload failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to upload avatar. Please try again later.")
 
     profile = UserProfileModel(
-        first_name=first_name.lower(),
-        last_name=last_name.lower(),
-        avatar=avatar_url,
-        gender=gender,
-        date_of_birth=date_of_birth,
-        info=info,
+        first_name=user["first_name"].lower(),
+        last_name=user["last_name"].lower(),
+        avatar=avatar_key,
+        gender=user["gender"],
+        date_of_birth=user["date_of_birth"],
+        info=user["info"],
         user_id=user_id
     )
 
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
-    return profile
+
+    avatar_url = await s3_client.get_file_url(avatar_key)
+
+    return ProfileResponseSchema(
+        id=profile.id,
+        user_id=profile.user_id,
+        first_name=profile.first_name,
+        last_name=profile.last_name,
+        gender=profile.gender,
+        date_of_birth=profile.date_of_birth,
+        info=profile.info,
+        avatar=avatar_url
+    )
