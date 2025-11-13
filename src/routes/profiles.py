@@ -1,7 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Header
-from fastapi.params import Depends
+from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio.session import AsyncSession
 from database import get_db, UserModel, UserProfileModel, UserGroupModel, RefreshTokenModel
@@ -65,6 +65,7 @@ async def user_profile(
         user_id: int,
         user: dict = Depends(profile),
         db: AsyncSession = Depends(get_db),
+        current_user_id: int = Depends(get_current_user_id),
         token: str = Depends(verify_token),
         s3_client: S3StorageInterface = Depends(get_s3_storage_client),
 ):
@@ -75,12 +76,16 @@ async def user_profile(
     )
     user_db = result.scalar_one_or_none()
 
+    current_user = await db.scalar(
+        select(UserModel)
+        .options(selectinload(UserModel.group))
+        .where(UserModel.id == current_user_id)
+    )
+
     if not user_db or not user_db.is_active:
         raise HTTPException(status_code=401, detail="User not found or not active.")
 
-    current_user_id = await get_current_user_id(token)
-
-    if user_db.group.id != 3 and current_user_id != user_id:
+    if current_user.group.name != UserGroupEnum.ADMIN and current_user_id != user_id:
         raise HTTPException(status_code=403, detail="You don't have permission to edit this profile.")
 
     if user_db.profile:
